@@ -43,3 +43,17 @@ class Match(Base):
     total_points_team1 = Column(Integer, default=0)
     total_points_team2 = Column(Integer, default=0)
     completed = Column(Boolean, default=False)
+    confirmed_by_team1 = Column(Boolean, default=False)
+    confirmed_by_team2 = Column(Boolean, default=False)
+    disputed = Column(Boolean, default=False)
+
+
+class Captain(Base):
+    __tablename__ = "captains"
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True)
+    name = Column(String, nullable=True)
+    hashed_password = Column(String)
+    team_id = Column(Integer, ForeignKey("teams.id"))
+    team_name = Column(String)
+    is_admin = Column(Boolean, default=False)

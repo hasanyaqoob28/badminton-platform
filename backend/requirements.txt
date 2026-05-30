@@ -5,3 +5,6 @@ pydantic
 ortools
 pandas
 openpyxl
+python-jose[cryptography]
+bcrypt
+python-multipart
