@@ -1,5 +1,6 @@
 from database import SessionLocal
-from models import Team, Player, Pair
+from models import Team, Player, Pair, Captain
+from auth import hash_password
 
 
 def seed():
@@ -36,6 +37,27 @@ def seed():
                 team_id=team.id
             )
             db.add(pair)
+
+        # create captain account: username = "captain_a", password = "pass_a"
+        suffix = team_name.split()[-1].lower()
+        captain = Captain(
+            username=f"captain_{suffix}",
+            hashed_password=hash_password(f"pass_{suffix}"),
+            team_id=team.id,
+            team_name=team_name,
+            is_admin=False
+        )
+        db.add(captain)
+
+    # admin account
+    admin = Captain(
+        username="admin",
+        hashed_password=hash_password("admin123"),
+        team_id=None,
+        team_name="Admin",
+        is_admin=True
+    )
+    db.add(admin)
 
     db.commit()
 
