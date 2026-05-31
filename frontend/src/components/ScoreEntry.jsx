@@ -1,9 +1,11 @@
 import { useState } from "react"
 import { api } from "../api"
 import { useAuth } from "../AuthContext"
+import { useToast } from "../ToastContext"
 
 export default function ScoreEntry({ matches, onScoreUpdated, onLoginClick }) {
   const { user } = useAuth()
+  const toast = useToast()
   const [selected, setSelected] = useState("")
   const [scores, setScores] = useState({ set1_team1: 0, set1_team2: 0, set2_team1: 0, set2_team2: 0 })
   const [saving, setSaving] = useState(false)
@@ -19,23 +21,38 @@ export default function ScoreEntry({ matches, onScoreUpdated, onLoginClick }) {
     e.preventDefault()
     if (!selected) return
     setSaving(true)
-    await api.put(`/match/${selected}/score`, scores)
+    try {
+      await api.put(`/match/${selected}/score`, scores)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+      setSelected("")
+      setScores({ set1_team1: 0, set1_team2: 0, set2_team1: 0, set2_team2: 0 })
+      onScoreUpdated()
+      toast.success("Score saved successfully!")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to save score.")
+    }
     setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
-    setSelected("")
-    setScores({ set1_team1: 0, set1_team2: 0, set2_team1: 0, set2_team2: 0 })
-    onScoreUpdated()
   }
 
   const handleConfirm = async (matchId) => {
-    await api.post(`/match/${matchId}/confirm`)
-    onScoreUpdated()
+    try {
+      await api.post(`/match/${matchId}/confirm`)
+      onScoreUpdated()
+      toast.success("Score confirmed!")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to confirm score.")
+    }
   }
 
   const handleDispute = async (matchId) => {
-    await api.post(`/match/${matchId}/dispute`)
-    onScoreUpdated()
+    try {
+      await api.post(`/match/${matchId}/dispute`)
+      onScoreUpdated()
+      toast.warning("Score disputed. Admin will review.")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to dispute score.")
+    }
   }
 
   const set = (field, val) => setScores(s => ({ ...s, [field]: Math.max(0, Math.min(30, Number(val))) }))

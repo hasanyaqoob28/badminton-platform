@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { api } from "../api"
 import { useAuth } from "../AuthContext"
+import { useToast } from "../ToastContext"
 
 const teamColors = [
   { accent: "#4ab870", glow: "rgba(74,184,112,0.15)", border: "#1a4a2e" },
@@ -51,7 +52,7 @@ function InlineEdit({ value, onSave, color, bold, canEdit }) {
   )
 }
 
-function PlayerRow({ player, index, color, canEdit, isAdmin, onSaveName, onSetCaptain, isCaptain }) {
+function PlayerRow({ player, index, color, canEdit, isAdmin, onSaveName, onSetCaptain, isCaptain, onError }) {
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState(player.name)
   const [saving, setSaving] = useState(false)
@@ -70,7 +71,7 @@ function PlayerRow({ player, index, color, canEdit, isAdmin, onSaveName, onSetCa
     try {
       await onSetCaptain(player.id)
     } catch (e) {
-      alert(e.response?.data?.detail || "Could not set captain")
+      if (onError) onError(e.response?.data?.detail || "Could not set captain")
     }
     setSettingCaptain(false)
     setEditing(false)
@@ -169,8 +170,9 @@ function PairEditRow({ pair, players, color, onSave, canEdit }) {
   )
 }
 
-export default function Teams({ teams, onTeamsUpdated, view }) {
+export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
   const { user } = useAuth()
+  const toast = useToast()
   const [selected, setSelected] = useState(teams[0]?.name || "")
   const [captains, setCaptains] = useState([])
   const [loadingCaptains, setLoadingCaptains] = useState(false)
@@ -195,33 +197,58 @@ export default function Teams({ teams, onTeamsUpdated, view }) {
   }, [view, isAdmin])
 
   const saveTeamName = async (newName) => {
-    await api.put(`/teams/${team.id}`, { name: newName })
-    onTeamsUpdated()
-    setSelected(newName)
+    try {
+      await api.put(`/teams/${team.id}`, { name: newName })
+      onTeamsUpdated()
+      setSelected(newName)
+      toast.success("Team name updated!")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to update team name.")
+    }
   }
 
   const savePlayerName = async (playerId, newName) => {
-    await api.put(`/players/${playerId}`, { name: newName })
-    onTeamsUpdated()
+    try {
+      await api.put(`/players/${playerId}`, { name: newName })
+      onTeamsUpdated()
+      toast.success("Player name updated!")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to update player name.")
+    }
   }
 
   const setPlayerAsCaptain = async (playerId) => {
-    await api.put(`/players/${playerId}/set-captain`)
-    onTeamsUpdated()
+    try {
+      await api.put(`/players/${playerId}/set-captain`)
+      onTeamsUpdated()
+      toast.success("Captain updated!")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Could not set captain.")
+    }
   }
 
   const savePair = async (pairId, data) => {
-    await api.put(`/pairs/${pairId}`, data)
-    onTeamsUpdated()
+    try {
+      await api.put(`/pairs/${pairId}`, data)
+      onTeamsUpdated()
+      toast.success("Pair updated!")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to update pair.")
+    }
   }
 
   const removeCaptain = async (captainId) => {
     if (!window.confirm("Remove this captain? They will need to re-register.")) return
     setRemoving(captainId)
-    await api.delete(`/captains/${captainId}`)
+    try {
+      await api.delete(`/captains/${captainId}`)
+      setCaptains(c => c.filter(x => x.id !== captainId))
+      onTeamsUpdated()
+      toast.success("Captain removed.")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to remove captain.")
+    }
     setRemoving(null)
-    setCaptains(c => c.filter(x => x.id !== captainId))
-    onTeamsUpdated()
   }
 
   // ── CAPTAINS VIEW ──────────────────────────────────────────────────────────
@@ -294,7 +321,7 @@ export default function Teams({ teams, onTeamsUpdated, view }) {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div className="teams-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
             {/* Players */}
             <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${color.border}`, borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: "0.68rem", fontWeight: 800, color: color.accent, letterSpacing: "0.12em", marginBottom: 10 }}>
@@ -317,6 +344,7 @@ export default function Teams({ teams, onTeamsUpdated, view }) {
                     onSaveName={savePlayerName}
                     onSetCaptain={setPlayerAsCaptain}
                     isCaptain={team.captain === p.name}
+                    onError={toast.error}
                   />
                 ))}
               </div>

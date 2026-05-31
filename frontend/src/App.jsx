@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { api } from "./api"
 import { useAuth } from "./AuthContext"
+import { useToast } from "./ToastContext"
 import ScheduleTable from "./components/ScheduleTable"
 import ScoreEntry from "./components/ScoreEntry"
 import Standings from "./components/Standings"
@@ -11,6 +12,7 @@ import AuthModal from "./components/AuthModal"
 
 export default function App() {
   const { user, logout } = useAuth()
+  const toast = useToast()
   const [matches, setMatches] = useState([])
   const [standings, setStandings] = useState([])
   const [teams, setTeams] = useState([])
@@ -21,12 +23,17 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false)
 
   const fetchAll = useCallback(async () => {
-    const [m, s, t] = await Promise.all([api.get("/schedule"), api.get("/standings"), api.get("/teams")])
-    setMatches(m.data)
-    setStandings(s.data)
-    setTeams(t.data)
-    setTicker(m.data.filter(x => x.completed).slice(-3).reverse())
-    setLoading(false)
+    try {
+      const [m, s, t] = await Promise.all([api.get("/schedule"), api.get("/standings"), api.get("/teams")])
+      setMatches(m.data)
+      setStandings(s.data)
+      setTeams(t.data)
+      setTicker(m.data.filter(x => x.completed).slice(-3).reverse())
+    } catch {
+      // silently retry on background refresh; error interceptor handles 401/500
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => {
@@ -129,7 +136,7 @@ export default function App() {
       </header>
 
       {/* STAT CARDS */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: "16px 28px 0" }}>
+      <div className="stat-cards page-padding" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: "16px 28px 0" }}>
         {[
           { label: "TOTAL MATCHES", value: total, icon: "🎯", color: "#4ab870", glow: "rgba(74,184,112,0.2)", border: "#1a4a2e" },
           { label: "COMPLETED", value: completed, icon: "✅", color: "#63b3ed", glow: "rgba(99,179,237,0.2)", border: "#1a3a5c" },
@@ -147,11 +154,11 @@ export default function App() {
       </div>
 
       {/* MAIN GRID */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20, padding: "16px 28px" }}>
+      <div className="main-grid page-padding" style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20, padding: "16px 28px" }}>
 
         {/* Left panel */}
         <div style={{ background: "linear-gradient(180deg, #0f1e35, #0d1a2e)", borderRadius: 16, padding: "20px 22px", border: "1px solid #1a3a5c", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }}>
-          <div style={{ display: "flex", gap: 0, marginBottom: 18, borderBottom: "1px solid #1a3a2e" }}>
+          <div className="nav-tabs" style={{ display: "flex", gap: 0, marginBottom: 18, borderBottom: "1px solid #1a3a2e" }}>
             {[
               { key: "TEAMS", icon: "👥" },
               { key: "SCHEDULE", icon: "📅" },
@@ -179,7 +186,7 @@ export default function App() {
         </div>
 
         {/* Right panel */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <div className="right-panel" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <div style={{ background: "linear-gradient(180deg, #0f2a1e, #0a1f16)", borderRadius: 16, padding: "20px 22px", border: "1px solid #1a4a2e", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }}>
             <div style={{ display: "flex", gap: 0, marginBottom: 16, borderBottom: "1px solid #1a4a2e" }}>
               {[{ key: "SCORE", icon: "🏸" }, { key: "STANDINGS", icon: "🏆" }].map(({ key, icon }) => (
