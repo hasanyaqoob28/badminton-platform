@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from "react"
 import { useAuth } from "../AuthContext"
+import { useToast } from "../ToastContext"
 import { api } from "../api"
 
 export default function AuthModal({ onClose }) {
   const { login } = useAuth()
+  const toast = useToast()
   const [mode, setMode] = useState("login")
   const [username, setUsername] = useState("")
   const [name, setName] = useState("")
@@ -28,6 +30,7 @@ export default function AuthModal({ onClose }) {
     try {
       if (mode === "login") {
         await login(username, password)
+        toast.success(`Welcome back, ${username}!`)
         onClose()
       } else {
         if (!teamId) { setError("Please select a team"); setLoading(false); return }

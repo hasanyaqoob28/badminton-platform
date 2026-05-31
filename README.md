@@ -92,11 +92,11 @@ Backend API runs at `http://localhost:8000`
 | Role | Username | Password |
 |------|----------|----------|
 | Admin | `admin` | *(set during seed)* |
-| Captain A | `captain_a` | `pas_a` |
-| Captain B | `captain_b` | `pas_b` |
-| Captain C | `captain_c` | `pas_c` |
-| Captain D | `captain_d` | `pas_d` |
-| Captain E | `captain_e` | `pas_e` |
+| Captain A | `captain_a` | `pass_a` |
+| Captain B | `captain_b` | `pass_b` |
+| Captain C | `captain_c` | `pass_c` |
+| Captain D | `captain_d` | `pass_d` |
+| Captain E | `captain_e` | `pass_e` |
 
 ---
 

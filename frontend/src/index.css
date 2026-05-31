@@ -14,3 +14,68 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: #3d7a52; }
 
 select option { background: #1a2f4a; color: #e2e8f0; }
+
+/* ── Responsive layout ─────────────────────────────────────────────────────── */
+
+/* Stat cards: 2 columns on mobile */
+@media (max-width: 640px) {
+  .stat-cards {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+/* Main grid: single column on tablet and below */
+@media (max-width: 900px) {
+  .main-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .right-panel {
+    order: -1;
+  }
+}
+
+/* Header: stack on mobile */
+@media (max-width: 600px) {
+  .header-inner {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+  }
+  .header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .progress-bar-wrap {
+    min-width: unset !important;
+    flex: 1;
+  }
+}
+
+/* Nav tabs: scrollable on small screens */
+@media (max-width: 500px) {
+  .nav-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .nav-tabs::-webkit-scrollbar { display: none; }
+  .nav-tabs button {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+}
+
+/* Teams grid: single column on mobile */
+@media (max-width: 480px) {
+  .teams-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Padding adjustments on mobile */
+@media (max-width: 600px) {
+  .page-padding {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+}
