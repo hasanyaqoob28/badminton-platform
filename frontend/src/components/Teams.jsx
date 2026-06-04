@@ -18,41 +18,83 @@ function hexToRgb(hex) {
   return `${r},${g},${b}`
 }
 
-function InlineEdit({ value, onSave, color, bold, canEdit }) {
-  const [editing, setEditing] = useState(false)
-  const [val, setVal] = useState(value)
-  const [saving, setSaving] = useState(false)
-
-  const handleSave = async () => {
-    if (!val.trim() || val === value) { setEditing(false); setVal(value); return }
-    setSaving(true)
-    await onSave(val.trim())
-    setSaving(false)
-    setEditing(false)
-  }
-
-  if (editing) return (
-    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-      <input autoFocus value={val} onChange={e => setVal(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") { setEditing(false); setVal(value) } }}
-        style={{ background: "rgba(255,255,255,0.06)", border: `1px solid ${color}`, borderRadius: 6, padding: "4px 8px", color: "#e2e8f0", fontSize: "0.82rem", outline: "none", width: 140 }} />
-      <button onClick={handleSave} disabled={saving} style={{ background: color, border: "none", borderRadius: 5, padding: "4px 10px", color: "#0a1628", fontSize: "0.72rem", fontWeight: 800, cursor: "pointer" }}>
-        {saving ? "..." : "✓"}
-      </button>
-      <button onClick={() => { setEditing(false); setVal(value) }} style={{ background: "rgba(255,255,255,0.06)", border: "none", borderRadius: 5, padding: "4px 8px", color: "#718096", fontSize: "0.72rem", cursor: "pointer" }}>✕</button>
-    </div>
-  )
-
+// Inline confirm dialog — no window.confirm
+function ConfirmRow({ message, onConfirm, onCancel, color = "#fc8181" }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: canEdit ? "pointer" : "default" }}
-      onClick={() => canEdit && setEditing(true)}>
-      <span style={{ fontWeight: bold ? 800 : 600, color: bold ? color : "#c8d8e8", fontSize: bold ? "1rem" : "0.82rem" }}>{value}</span>
-      {canEdit && <span style={{ fontSize: "0.65rem", color: "#2d5a3d", opacity: 0.7 }}>✏️</span>}
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "rgba(252,129,129,0.08)", border: "1px solid #4a1a1a", borderRadius: 8 }}>
+      <span style={{ fontSize: "0.78rem", color: "#e2e8f0", flex: 1 }}>{message}</span>
+      <button onClick={onConfirm} style={{ padding: "4px 12px", background: "rgba(252,129,129,0.2)", border: "1px solid #4a1a1a", borderRadius: 5, color: "#fc8181", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer" }}>YES</button>
+      <button onClick={onCancel} style={{ padding: "4px 10px", background: "rgba(255,255,255,0.05)", border: "none", borderRadius: 5, color: "#718096", fontSize: "0.72rem", cursor: "pointer" }}>NO</button>
     </div>
   )
 }
 
-function PlayerRow({ player, index, color, canEdit, isAdmin, onSaveName, onSetCaptain, isCaptain, onError }) {
+// Team name: admin gets inline edit, captain gets a "request rename" flow
+function TeamNameCell({ team, color, isAdmin, isCaptainOfTeam, onAdminSave, onCaptainRequest }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(team.name)
+  const [saving, setSaving] = useState(false)
+  const [requested, setRequested] = useState(false)
+
+  const handleAdminSave = async () => {
+    if (!val.trim() || val === team.name) { setEditing(false); setVal(team.name); return }
+    setSaving(true)
+    await onAdminSave(val.trim())
+    setSaving(false)
+    setEditing(false)
+  }
+
+  const handleCaptainRequest = async () => {
+    if (!val.trim() || val === team.name) { setEditing(false); setVal(team.name); return }
+    setSaving(true)
+    const ok = await onCaptainRequest(val.trim())
+    setSaving(false)
+    setEditing(false)
+    if (ok) setRequested(true)
+  }
+
+  if (isAdmin && editing) return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <input autoFocus value={val} onChange={e => setVal(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") handleAdminSave(); if (e.key === "Escape") { setEditing(false); setVal(team.name) } }}
+        style={{ background: "rgba(255,255,255,0.06)", border: `1px solid ${color}`, borderRadius: 6, padding: "4px 8px", color: "#e2e8f0", fontSize: "0.82rem", outline: "none", width: 140 }} />
+      <button onClick={handleAdminSave} disabled={saving} style={{ background: color, border: "none", borderRadius: 5, padding: "4px 10px", color: "#0a1628", fontSize: "0.72rem", fontWeight: 800, cursor: "pointer" }}>
+        {saving ? "..." : "✓"}
+      </button>
+      <button onClick={() => { setEditing(false); setVal(team.name) }} style={{ background: "rgba(255,255,255,0.06)", border: "none", borderRadius: 5, padding: "4px 8px", color: "#718096", fontSize: "0.72rem", cursor: "pointer" }}>✕</button>
+    </div>
+  )
+
+  if (isCaptainOfTeam && editing) return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <input autoFocus value={val} onChange={e => setVal(e.target.value)}
+        onKeyDown={e => { if (e.key === "Escape") { setEditing(false); setVal(team.name) } }}
+        style={{ background: "rgba(255,255,255,0.06)", border: `1px solid ${color}`, borderRadius: 6, padding: "4px 8px", color: "#e2e8f0", fontSize: "0.82rem", outline: "none", width: 140 }} />
+      <button onClick={handleCaptainRequest} disabled={saving} style={{ background: color, border: "none", borderRadius: 5, padding: "4px 10px", color: "#0a1628", fontSize: "0.72rem", fontWeight: 800, cursor: "pointer" }}>
+        {saving ? "..." : "REQUEST"}
+      </button>
+      <button onClick={() => { setEditing(false); setVal(team.name) }} style={{ background: "rgba(255,255,255,0.06)", border: "none", borderRadius: 5, padding: "4px 8px", color: "#718096", fontSize: "0.72rem", cursor: "pointer" }}>✕</button>
+    </div>
+  )
+
+  const canClick = isAdmin || isCaptainOfTeam
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: canClick ? "pointer" : "default" }}
+        onClick={() => canClick && !requested && setEditing(true)}>
+        <span style={{ fontWeight: 800, color, fontSize: "1rem" }}>{team.name}</span>
+        {canClick && !requested && <span style={{ fontSize: "0.65rem", color: "#2d5a3d", opacity: 0.7 }}>✏️</span>}
+      </div>
+      {isCaptainOfTeam && !isAdmin && (
+        requested
+          ? <span style={{ fontSize: "0.65rem", color: "#f6ad55", fontWeight: 700 }}>⏳ Rename requested</span>
+          : <span style={{ fontSize: "0.62rem", color: "#2d5a3d" }}>(edit to request rename)</span>
+      )}
+    </div>
+  )
+}
+
+function PlayerRow({ player, index, color, canEdit, isAdmin, onSaveName, onSetCaptain, isCaptain }) {
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState(player.name)
   const [saving, setSaving] = useState(false)
@@ -68,11 +110,7 @@ function PlayerRow({ player, index, color, canEdit, isAdmin, onSaveName, onSetCa
 
   const handleSetCaptain = async () => {
     setSettingCaptain(true)
-    try {
-      await onSetCaptain(player.id)
-    } catch (e) {
-      if (onError) onError(e.response?.data?.detail || "Could not set captain")
-    }
+    await onSetCaptain(player.id)
     setSettingCaptain(false)
     setEditing(false)
   }
@@ -107,7 +145,7 @@ function PlayerRow({ player, index, color, canEdit, isAdmin, onSaveName, onSetCa
         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, cursor: canEdit ? "pointer" : "default" }}
           onClick={() => canEdit && setEditing(true)}>
           <span style={{ fontWeight: 600, color: "#c8d8e8", fontSize: "0.82rem" }}>{player.name}</span>
-          {isCaptain && <span style={{ fontSize: "0.62rem", color: color, fontWeight: 700 }}>CAPTAIN</span>}
+          {isCaptain && <span style={{ fontSize: "0.62rem", color, fontWeight: 700 }}>CAPTAIN</span>}
           {canEdit && <span style={{ fontSize: "0.65rem", color: "#2d5a3d", opacity: 0.7, marginLeft: "auto" }}>✏️</span>}
         </div>
       )}
@@ -170,24 +208,31 @@ function PairEditRow({ pair, players, color, onSave, canEdit }) {
   )
 }
 
-export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
+export default function Teams({ teams, onTeamsUpdated, view }) {
   const { user } = useAuth()
   const toast = useToast()
   const [selected, setSelected] = useState(teams[0]?.name || "")
   const [captains, setCaptains] = useState([])
   const [loadingCaptains, setLoadingCaptains] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(null) // captain id to confirm
   const [removing, setRemoving] = useState(null)
 
   const isAdmin = user?.is_admin
   const isCaptain = !!user && !user.is_admin
-  const canEdit = isAdmin || isCaptain
 
   const teamIdx = teams.findIndex(t => t.name === selected)
   const team = teams[teamIdx]
   const color = teamColors[teamIdx % teamColors.length]
-
-  // For captain: only allow editing their own team
   const canEditTeam = isAdmin || (isCaptain && user?.team === team?.name)
+  const isCaptainOfTeam = isCaptain && user?.team === team?.name
+
+  // Detect duplicate names in this team
+  const duplicateNames = team
+    ? new Set(
+        team.players.map(p => p.name.trim().toLowerCase())
+          .filter((n, i, arr) => arr.indexOf(n) !== i)
+      )
+    : new Set()
 
   useEffect(() => {
     if (isAdmin && view === "captains") {
@@ -196,7 +241,7 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
     }
   }, [view, isAdmin])
 
-  const saveTeamName = async (newName) => {
+  const adminSaveTeamName = async (newName) => {
     try {
       await api.put(`/teams/${team.id}`, { name: newName })
       onTeamsUpdated()
@@ -204,6 +249,17 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
       toast.success("Team name updated!")
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to update team name.")
+    }
+  }
+
+  const captainRequestTeamRename = async (newName) => {
+    try {
+      await api.post(`/teams/${team.id}/request-rename`, { new_name: newName })
+      toast.success("Rename request submitted to admin!")
+      return true
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to submit rename request.")
+      return false
     }
   }
 
@@ -238,8 +294,8 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
   }
 
   const removeCaptain = async (captainId) => {
-    if (!window.confirm("Remove this captain? They will need to re-register.")) return
     setRemoving(captainId)
+    setConfirmRemove(null)
     try {
       await api.delete(`/captains/${captainId}`)
       setCaptains(c => c.filter(x => x.id !== captainId))
@@ -263,19 +319,28 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
               <p style={{ color: "#2d5a3d", fontSize: "0.78rem" }}>No captains registered yet.</p>
             )}
             {captains.map(c => (
-              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid #1a3a2e", borderRadius: 10 }}>
-                <span style={{ fontSize: "0.9rem" }}>{c.is_admin ? "👑" : "🏸"}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "#e2e8f0" }}>{c.name || c.username}</div>
-                  <div style={{ fontSize: "0.68rem", color: "#2d8a52" }}>{c.team}</div>
+              <div key={c.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid #1a3a2e", borderRadius: 10 }}>
+                  <span style={{ fontSize: "0.9rem" }}>{c.is_admin ? "👑" : "🏸"}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "#e2e8f0" }}>{c.name || c.username}</div>
+                    <div style={{ fontSize: "0.68rem", color: "#2d8a52" }}>{c.team}</div>
+                  </div>
+                  {!c.is_admin && confirmRemove !== c.id && (
+                    <button onClick={() => setConfirmRemove(c.id)} disabled={removing === c.id} style={{
+                      padding: "4px 12px", background: "rgba(252,129,129,0.1)", border: "1px solid #4a1a1a",
+                      borderRadius: 6, color: "#fc8181", fontSize: "0.68rem", fontWeight: 700, cursor: "pointer"
+                    }}>
+                      {removing === c.id ? "..." : "✕ REMOVE"}
+                    </button>
+                  )}
                 </div>
-                {!c.is_admin && (
-                  <button onClick={() => removeCaptain(c.id)} disabled={removing === c.id} style={{
-                    padding: "4px 12px", background: "rgba(252,129,129,0.1)", border: "1px solid #4a1a1a",
-                    borderRadius: 6, color: "#fc8181", fontSize: "0.68rem", fontWeight: 700, cursor: "pointer"
-                  }}>
-                    {removing === c.id ? "..." : "✕ REMOVE"}
-                  </button>
+                {confirmRemove === c.id && (
+                  <ConfirmRow
+                    message={`Remove ${c.name || c.username}? They will need to re-register.`}
+                    onConfirm={() => removeCaptain(c.id)}
+                    onCancel={() => setConfirmRemove(null)}
+                  />
                 )}
               </div>
             ))}
@@ -288,7 +353,6 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
   // ── ROSTER / TEAMS VIEW ────────────────────────────────────────────────────
   return (
     <div>
-      {/* Team selector tabs */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         {teams.map((t, i) => {
           const c = teamColors[i % teamColors.length]
@@ -310,10 +374,16 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
 
       {team && (
         <div>
-          {/* Team name + captain */}
           <div style={{ marginBottom: 14, padding: "10px 14px", background: `rgba(${hexToRgb(color.accent)},0.06)`, borderRadius: 10, border: `1px solid ${color.border}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <span style={{ fontSize: "0.65rem", fontWeight: 800, color: "#2d5a3d", letterSpacing: "0.1em" }}>TEAM</span>
-            <InlineEdit value={team.name} onSave={saveTeamName} color={color.accent} bold canEdit={canEditTeam} />
+            <TeamNameCell
+              team={team}
+              color={color.accent}
+              isAdmin={isAdmin}
+              isCaptainOfTeam={isCaptainOfTeam}
+              onAdminSave={adminSaveTeamName}
+              onCaptainRequest={captainRequestTeamRename}
+            />
             <div style={{ marginLeft: "auto", fontSize: "0.68rem" }}>
               {team.captain
                 ? <span style={{ color: "#4a9d6f" }}>👑 {team.captain}</span>
@@ -322,7 +392,6 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
           </div>
 
           <div className="teams-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            {/* Players */}
             <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${color.border}`, borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: "0.68rem", fontWeight: 800, color: color.accent, letterSpacing: "0.12em", marginBottom: 10 }}>
                 👥 PLAYERS ({team.players.length})
@@ -332,8 +401,19 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
                   Login as captain or admin to edit
                 </div>
               )}
+              {duplicateNames.size > 0 && (
+                <div style={{ fontSize: "0.68rem", color: "#f6ad55", background: "rgba(246,173,85,0.08)", border: "1px solid #4a3010", borderRadius: 6, padding: "6px 10px", marginBottom: 8 }}>
+                  ⚠️ Duplicate names detected — rename players to avoid captain ambiguity
+                </div>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                {team.players.map((p, i) => (
+                {[...team.players]
+                  .sort((a, b) => {
+                    const aCap = team.captainPlayerId ? a.id === team.captainPlayerId : a.name === team.captain
+                    const bCap = team.captainPlayerId ? b.id === team.captainPlayerId : b.name === team.captain
+                    return aCap ? -1 : bCap ? 1 : 0
+                  })
+                  .map((p, i) => (
                   <PlayerRow
                     key={p.id}
                     player={p}
@@ -343,14 +423,12 @@ export default function Teams({ teams, onTeamsUpdated, view, onLoginClick }) {
                     isAdmin={isAdmin}
                     onSaveName={savePlayerName}
                     onSetCaptain={setPlayerAsCaptain}
-                    isCaptain={team.captain === p.name}
-                    onError={toast.error}
+                    isCaptain={team.captainPlayerId ? p.id === team.captainPlayerId : p.name === team.captain}
                   />
                 ))}
               </div>
             </div>
 
-            {/* Pairs */}
             <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${color.border}`, borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: "0.68rem", fontWeight: 800, color: color.accent, letterSpacing: "0.12em", marginBottom: 10 }}>
                 🏸 PAIRS ({team.pairs.length})

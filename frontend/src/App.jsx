@@ -8,7 +8,9 @@ import Standings from "./components/Standings"
 import Teams from "./components/Teams"
 import Stats from "./components/Stats"
 import Knockout from "./components/Knockout"
+import AdminSettings from "./components/AdminSettings"
 import AuthModal from "./components/AuthModal"
+import ReLoginModal from "./components/ReLoginModal"
 
 export default function App() {
   const { user, logout } = useAuth()
@@ -21,6 +23,43 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [ticker, setTicker] = useState([])
   const [showAuth, setShowAuth] = useState(false)
+  const [showReLogin, setShowReLogin] = useState(false)
+  const [sessionConflict, setSessionConflict] = useState(false)
+  const [pendingRequests, setPendingRequests] = useState(0)
+
+  const fetchPendingRequests = useCallback(async () => {
+    if (!user?.is_admin) return
+    try {
+      const res = await api.get("/admin-requests")
+      setPendingRequests(res.data.filter(r => r.status === "pending").length)
+    } catch {}
+  }, [user])
+
+  // Listen for re-login events from interceptor
+  useEffect(() => {
+    const handleReLoginRequired = () => {
+      setShowReLogin(true)
+    }
+
+    window.addEventListener("auth:relogin-required", handleReLoginRequired)
+    return () => window.removeEventListener("auth:relogin-required", handleReLoginRequired)
+  }, [])
+
+  useEffect(() => {
+    const handleSessionConflict = () => {
+      logout()
+      setSessionConflict(true)
+    }
+    window.addEventListener("auth:session-conflict", handleSessionConflict)
+    return () => window.removeEventListener("auth:session-conflict", handleSessionConflict)
+  }, [logout])
+
+  // Switch to TEAMS tab when a captain logs in
+  useEffect(() => {
+    if (user && !user.is_admin) {
+      setScheduleTab("TEAMS")
+    }
+  }, [user])
 
   const fetchAll = useCallback(async () => {
     try {
@@ -41,6 +80,12 @@ export default function App() {
     const interval = setInterval(fetchAll, 30000)
     return () => clearInterval(interval)
   }, [fetchAll])
+
+  useEffect(() => {
+    fetchPendingRequests()
+    const interval = setInterval(fetchPendingRequests, 30000)
+    return () => clearInterval(interval)
+  }, [fetchPendingRequests])
 
   const completed = matches.filter(m => m.completed).length
   const total = matches.length
@@ -164,16 +209,29 @@ export default function App() {
               { key: "SCHEDULE", icon: "📅" },
               { key: "STATS", icon: "📊" },
               { key: "KNOCKOUT", icon: "🏆" },
-              ...(user?.is_admin ? [{ key: "ROSTER", icon: "📋" }, { key: "CAPTAINS", icon: "👑" }] : []),
+              ...(user?.is_admin ? [{ key: "ROSTER", icon: "📋" }, { key: "CAPTAINS", icon: "👑" }, { key: "SETTINGS", icon: "⚙️" }] : []),
             ].map(({ key, icon }) => (
-              <button key={key} onClick={() => setScheduleTab(key)} style={{
+              <button key={key} onClick={() => { setScheduleTab(key); if (key === "SETTINGS") fetchPendingRequests() }} style={{
                 padding: "8px 16px", background: "none", border: "none", cursor: "pointer",
                 fontSize: "0.75rem", fontWeight: 800, letterSpacing: "0.08em",
                 color: scheduleTab === key ? "#4ab870" : "#2d5a3d",
                 borderBottom: scheduleTab === key ? "2px solid #4ab870" : "2px solid transparent",
-                marginBottom: -1, transition: "all 0.2s"
+                marginBottom: -1, transition: "all 0.2s",
+                position: "relative"
               }}>
                 {icon} {key}
+                {key === "SETTINGS" && pendingRequests > 0 && (
+                  <span style={{
+                    position: "absolute", top: 2, right: 2,
+                    background: "#fc8181", color: "white",
+                    borderRadius: "50%", width: 16, height: 16,
+                    fontSize: "0.6rem", fontWeight: 900,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    lineHeight: 1
+                  }}>
+                    {pendingRequests > 9 ? "9+" : pendingRequests}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -181,6 +239,7 @@ export default function App() {
           {scheduleTab === "TEAMS" && <Teams teams={user && !user.is_admin ? teams.filter(t => t.name === user.team) : teams} onTeamsUpdated={fetchAll} />}
           {scheduleTab === "ROSTER" && <Teams teams={user && !user.is_admin ? teams.filter(t => t.name === user.team) : teams} onTeamsUpdated={fetchAll} view="roster" />}
           {scheduleTab === "CAPTAINS" && <Teams teams={teams} onTeamsUpdated={fetchAll} view="captains" />}
+          {scheduleTab === "SETTINGS" && <AdminSettings onRequestsChange={fetchPendingRequests} />}
           {scheduleTab === "STATS" && <Stats />}
           {scheduleTab === "KNOCKOUT" && <Knockout />}
         </div>
@@ -218,8 +277,21 @@ export default function App() {
         </div>
       </div>
 
+      {/* Session conflict banner */}
+      {sessionConflict && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 2000, background: "#7b341e", borderBottom: "1px solid #c05621", padding: "12px 28px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "0.85rem", color: "#fed7aa", fontWeight: 600 }}>
+            ⚠️ You were logged out — this account was signed in on another device or tab.
+          </span>
+          <button onClick={() => setSessionConflict(false)} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 6, padding: "4px 12px", color: "#fed7aa", cursor: "pointer", fontSize: "0.8rem", fontWeight: 700 }}>DISMISS</button>
+        </div>
+      )}
+
       {/* Auth modal */}
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+
+      {/* Re-login modal */}
+      <ReLoginModal isOpen={showReLogin} onClose={() => setShowReLogin(false)} />
     </div>
   )
 }

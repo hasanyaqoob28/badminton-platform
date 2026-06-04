@@ -1,5 +1,6 @@
 import React from "react"
 import ReactDOM from "react-dom/client"
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
 import App from "./App"
 import { AuthProvider } from "./AuthContext"
 import { ToastProvider, useToast } from "./ToastContext"
@@ -17,11 +18,15 @@ function ToastBridge() {
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <ToastProvider>
-      <ToastBridge />
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </ToastProvider>
+    <Router>
+      <ToastProvider>
+        <ToastBridge />
+        <AuthProvider>
+          <Routes>
+            <Route path="/" element={<App />} />
+          </Routes>
+        </AuthProvider>
+      </ToastProvider>
+    </Router>
   </React.StrictMode>
 )
