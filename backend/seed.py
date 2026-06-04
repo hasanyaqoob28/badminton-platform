@@ -1,9 +1,12 @@
-from database import SessionLocal
+from database import SessionLocal, Base, engine
 from models import Team, Player, Pair, Captain
 from auth import hash_password
 
 
 def seed():
+    # Create all tables first
+    Base.metadata.create_all(bind=engine)
+    
     db = SessionLocal()
 
     teams = ["Team A", "Team B", "Team C", "Team D", "Team E"]
@@ -42,6 +45,8 @@ def seed():
         suffix = team_name.split()[-1].lower()
         captain = Captain(
             username=f"captain_{suffix}",
+            name=f"Captain {suffix.upper()}",
+            email=f"captain_{suffix}@badminton.local",
             hashed_password=hash_password(f"pass_{suffix}"),
             team_id=team.id,
             team_name=team_name,
@@ -52,6 +57,8 @@ def seed():
     # admin account
     admin = Captain(
         username="admin",
+        name="Admin",
+        email="admin@badminton.local",
         hashed_password=hash_password("admin123"),
         team_id=None,
         team_name="Admin",

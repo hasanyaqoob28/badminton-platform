@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime
+from datetime import datetime
 from database import Base
 
 
@@ -53,7 +54,30 @@ class Captain(Base):
     id = Column(Integer, primary_key=True)
     username = Column(String, unique=True)
     name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
     hashed_password = Column(String)
     team_id = Column(Integer, ForeignKey("teams.id"))
     team_name = Column(String)
     is_admin = Column(Boolean, default=False)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=True)
+    session_token = Column(String, nullable=True)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+    id = Column(Integer, primary_key=True)
+    captain_id = Column(Integer, ForeignKey("captains.id"))
+    token = Column(String, unique=True)
+    expires_at = Column(DateTime)
+    used = Column(Boolean, default=False)
+
+
+class PasswordChangeRequest(Base):
+    __tablename__ = "password_change_requests"
+    id = Column(Integer, primary_key=True)
+    captain_id = Column(Integer, ForeignKey("captains.id"))
+    request_type = Column(String)  # "password_reset" or "change_captain" or "change_team_name"
+    reason = Column(String, nullable=True)
+    status = Column(String, default="pending")  # pending, approved, denied
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

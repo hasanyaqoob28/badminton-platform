@@ -4,14 +4,18 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from collections import defaultdict
+from datetime import datetime, timedelta
+import secrets
 
 from database import Base, engine, SessionLocal
-from models import Match, Team, Player, Pair, Captain
+from models import Match, Team, Player, Pair, Captain, PasswordResetToken, PasswordChangeRequest
 from scheduler import generate_matches
 from optimizer import optimize_schedule
 from auth import (
     verify_password, create_token, get_current_user,
-    require_auth, require_admin, hash_password
+    require_auth, require_admin, hash_password,
+    create_access_token, create_refresh_token, verify_refresh_token,
+    validate_password_strength, generate_session_token, oauth2_scheme, decode_token
 )
 
 app = FastAPI(title="Badminton Tournament v2")
@@ -42,12 +46,47 @@ def get_db():
         db.close()
 
 
+def require_session(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Validate JWT + enforce single session."""
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    captain = db.query(Captain).filter(Captain.username == payload["sub"]).first()
+    if not captain:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if captain.session_token and captain.session_token != payload.get("sid"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired — logged in elsewhere")
+    return payload
+
+
+def require_admin_session(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Validate JWT + enforce single session + require admin."""
+    if not token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "access" or not payload.get("is_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    captain = db.query(Captain).filter(Captain.username == payload["sub"]).first()
+    if not captain:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    if captain.session_token and captain.session_token != payload.get("sid"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired — logged in elsewhere")
+    return payload
+
+
 # ── Pydantic schemas ─────────────────────────────────────────────────────────
 class ScoreUpdate(BaseModel):
     set1_team1: int
     set1_team2: int
     set2_team1: int
     set2_team2: int
+
+    def validate_scores(self):
+        for v in [self.set1_team1, self.set1_team2, self.set2_team1, self.set2_team2]:
+            if v < 0 or v > 21:
+                raise ValueError("Score must be between 0 and 21")
 
 class TeamUpdate(BaseModel):
     name: str
@@ -71,6 +110,26 @@ class RegisterBody(BaseModel):
     password: str
     team_id: int
     name: str = ""
+    player_id: int = None
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+class RequestPasswordResetBody(BaseModel):
+    username: str
+
+class RequestPasswordChangeBody(BaseModel):
+    reason: str = ""
+
+class RequestTeamRenameBody(BaseModel):
+    new_name: str
+
+class ApproveResetBody(BaseModel):
+    new_password: str = None
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -84,24 +143,185 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     captain = db.query(Captain).filter(Captain.username == form.username).first()
     if not captain or not verify_password(form.password, captain.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    token = create_token({
-        "sub": captain.username,
-        "team": captain.team_name,
-        "team_id": captain.team_id,
-        "is_admin": captain.is_admin
+    if not captain.is_admin:
+        pending = db.query(PasswordChangeRequest).filter(
+            PasswordChangeRequest.captain_id == captain.id,
+            PasswordChangeRequest.request_type == "registration_approval",
+            PasswordChangeRequest.status == "pending"
+        ).first()
+        if pending:
+            raise HTTPException(status_code=403, detail="Your registration is pending admin approval. Please wait.")
+    # Generate new session token — invalidates any existing session
+    sid = generate_session_token()
+    captain.session_token = sid
+    db.commit()
+    access_token = create_access_token({
+        "sub": captain.username, "team": captain.team_name,
+        "team_id": captain.team_id, "is_admin": captain.is_admin, "sid": sid
     })
+    refresh_token = create_refresh_token({"sub": captain.username, "sid": sid})
     return {
-        "access_token": token,
-        "token_type": "bearer",
-        "username": captain.username,
-        "team": captain.team_name,
-        "is_admin": captain.is_admin
+        "access_token": access_token, "refresh_token": refresh_token,
+        "token_type": "bearer", "expires_in": 900,
+        "username": captain.username, "team": captain.team_name, "is_admin": captain.is_admin
     }
 
 
+@app.post("/refresh")
+def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
+    payload = verify_refresh_token(body.refresh_token)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
+    captain = db.query(Captain).filter(Captain.username == payload["sub"]).first()
+    if not captain:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    # Validate session token
+    if captain.session_token and captain.session_token != payload.get("sid"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired — logged in elsewhere")
+    new_access_token = create_access_token({
+        "sub": captain.username, "team": captain.team_name,
+        "team_id": captain.team_id, "is_admin": captain.is_admin,
+        "sid": captain.session_token
+    })
+    return {"access_token": new_access_token, "expires_in": 900}
+
+
 @app.get("/me")
-def me(user=Depends(require_auth)):
+def me(user=Depends(require_session)):
     return user
+
+
+@app.post("/change-password")
+def change_password(body: ChangePasswordRequest, db: Session = Depends(get_db), user=Depends(require_session)):
+    """Change password for authenticated user."""
+    # Get captain from database
+    captain = db.query(Captain).filter(Captain.username == user["sub"]).first()
+    if not captain:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    
+    # Verify current password is correct
+    if not verify_password(body.current_password, captain.hashed_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    
+    # Validate new password strength
+    is_valid, error_msg = validate_password_strength(body.new_password)
+    if not is_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
+    
+    # Verify new password is different from current
+    if body.current_password == body.new_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be different from current password")
+    
+    # Update password
+    captain.hashed_password = hash_password(body.new_password)
+    db.commit()
+    
+    return {"detail": "Password changed successfully"}
+
+
+@app.post("/request-password-reset")
+def request_password_reset(body: RequestPasswordResetBody, db: Session = Depends(get_db)):
+    """Request a password reset - sends request to admin for approval."""
+    captain = db.query(Captain).filter(Captain.username == body.username).first()
+    if not captain:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    existing = db.query(PasswordChangeRequest).filter(
+        PasswordChangeRequest.captain_id == captain.id,
+        PasswordChangeRequest.request_type == "password_reset",
+        PasswordChangeRequest.status == "pending"
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Password reset request already pending. Please wait for admin approval.")
+
+    db.add(PasswordChangeRequest(
+        captain_id=captain.id,
+        request_type="password_reset",
+        reason=f"Password reset requested by {captain.username}",
+        status="pending"
+    ))
+    db.commit()
+    return {"detail": "Password reset request submitted to admin. Please wait for approval."}
+
+
+@app.get("/admin-requests")
+def get_admin_requests(db: Session = Depends(get_db), user=Depends(require_admin_session)):
+    """Get all pending requests for admin (registrations + team renames + password resets)."""
+    requests = db.query(PasswordChangeRequest).order_by(PasswordChangeRequest.created_at.desc()).all()
+    result = []
+    for r in requests:
+        captain = db.query(Captain).filter(Captain.id == r.captain_id).first()
+        result.append({
+            "id": r.id,
+            "type": r.request_type,
+            "username": captain.username if captain else "unknown",
+            "team": captain.team_name if captain else "",
+            "team_id": captain.team_id if captain else None,
+            "reason": r.reason or "",
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return result
+
+
+@app.post("/admin-requests/{request_id}/approve")
+def approve_admin_request(request_id: int, body: ApproveResetBody = None, db: Session = Depends(get_db), user=Depends(require_admin_session)):
+    """Approve a registration or team rename request."""
+    req = db.query(PasswordChangeRequest).filter(
+        PasswordChangeRequest.id == request_id,
+        PasswordChangeRequest.status == "pending"
+    ).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found or already processed")
+
+    if req.request_type == "password_reset":
+        if not body or not body.new_password:
+            raise HTTPException(status_code=400, detail="new_password required for password reset approval")
+        is_valid, error_msg = validate_password_strength(body.new_password)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+        captain = db.query(Captain).filter(Captain.id == req.captain_id).first()
+        if not captain:
+            raise HTTPException(status_code=404, detail="User not found")
+        captain.hashed_password = hash_password(body.new_password)
+
+    elif req.request_type == "team_rename":
+        captain = db.query(Captain).filter(Captain.id == req.captain_id).first()
+        if not captain:
+            raise HTTPException(status_code=404, detail="Captain not found")
+        new_name = req.reason
+        team = db.query(Team).filter(Team.id == captain.team_id).first()
+        if team:
+            old_name = team.name
+            team.name = new_name
+            db.query(Match).filter(Match.team1 == old_name).update({"team1": new_name})
+            db.query(Match).filter(Match.team2 == old_name).update({"team2": new_name})
+            db.query(Captain).filter(Captain.team_id == team.id).update({"team_name": new_name})
+
+    # registration_approval: just mark approved, no extra action needed
+    req.status = "approved"
+    db.commit()
+    return {"detail": "Request approved"}
+
+
+@app.post("/admin-requests/{request_id}/deny")
+def deny_admin_request(request_id: int, db: Session = Depends(get_db), user=Depends(require_admin_session)):
+    req = db.query(PasswordChangeRequest).filter(
+        PasswordChangeRequest.id == request_id,
+        PasswordChangeRequest.status == "pending"
+    ).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found or already processed")
+    
+    # If denying a registration, delete the captain account
+    if req.request_type == "registration_approval":
+        captain = db.query(Captain).filter(Captain.id == req.captain_id).first()
+        if captain:
+            db.delete(captain)
+    
+    req.status = "denied"
+    db.commit()
+    return {"detail": "Request denied"}
 
 
 @app.post("/register")
@@ -111,22 +331,51 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
     team = db.query(Team).filter(Team.id == body.team_id).first()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
-    # only one captain per team
     existing = db.query(Captain).filter(Captain.team_id == body.team_id, Captain.is_admin == False).first()
     if existing:
         raise HTTPException(status_code=400, detail="This team already has a captain")
+    # Validate password strength
+    is_valid, error_msg = validate_password_strength(body.password)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    captain_name = body.name or body.username
     captain = Captain(
         username=body.username,
-        name=body.name or body.username,
+        name=captain_name,
         hashed_password=hash_password(body.password),
         team_id=body.team_id,
         team_name=team.name,
         is_admin=False
     )
     db.add(captain)
+    db.flush()
+    # Link to selected player and update player name
+    if body.player_id:
+        player = db.query(Player).filter(Player.id == body.player_id, Player.team_id == body.team_id).first()
+        if player:
+            captain.player_id = player.id
+            captain.name = player.name  # use the player's current name as captain display name
+    else:
+        # Try case-insensitive name match as fallback
+        existing_player = db.query(Player).filter(
+            Player.team_id == body.team_id,
+            Player.name.ilike(captain_name)
+        ).first()
+        if existing_player:
+            captain.player_id = existing_player.id
+    # Create registration approval request for admin
+    db.add(PasswordChangeRequest(
+        captain_id=captain.id,
+        request_type="registration_approval",
+        reason=f"{captain.username} registered for {team.name}",
+        status="pending"
+    ))
+    sid = generate_session_token()
+    captain.session_token = sid
     db.commit()
-    token = create_token({"sub": captain.username, "team": captain.team_name, "team_id": captain.team_id, "is_admin": False})
-    return {"access_token": token, "token_type": "bearer", "username": captain.username, "team": captain.team_name, "is_admin": False}
+    access_token = create_access_token({"sub": captain.username, "team": captain.team_name, "team_id": captain.team_id, "is_admin": False, "sid": sid})
+    refresh_token = create_refresh_token({"sub": captain.username, "sid": sid})
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer", "expires_in": 900, "username": captain.username, "team": captain.team_name, "is_admin": False}
 
 
 # ── Schedule ─────────────────────────────────────────────────────────────────
@@ -164,10 +413,21 @@ def _match_dict(m):
 
 # ── Score entry (captains only) ───────────────────────────────────────────────
 @app.put("/match/{match_id}/score")
-def update_score(match_id: int, score: ScoreUpdate, db: Session = Depends(get_db), user=Depends(require_auth)):
+def update_score(match_id: int, score: ScoreUpdate, db: Session = Depends(get_db), user=Depends(require_session)):
     match = db.query(Match).filter(Match.id == match_id).first()
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
+
+    # Validate scores - exactly one team must score 21, other must be less
+    for s1, s2 in [(score.set1_team1, score.set1_team2), (score.set2_team1, score.set2_team2)]:
+        if s1 < 0 or s2 < 0:
+            raise HTTPException(status_code=400, detail="Scores cannot be negative")
+        if s1 > 21 or s2 > 21:
+            raise HTTPException(status_code=400, detail="Score cannot exceed 21")
+        if s1 == 21 and s2 == 21:
+            raise HTTPException(status_code=400, detail="Both teams cannot score 21 in the same set")
+        if s1 != 21 and s2 != 21:
+            raise HTTPException(status_code=400, detail="One team must score exactly 21 to win a set")
 
     # captains can only score their own team's matches
     if not user.get("is_admin") and user.get("team") not in [match.team1, match.team2]:
@@ -195,18 +455,24 @@ def update_score(match_id: int, score: ScoreUpdate, db: Session = Depends(get_db
 
 # ── Score confirmation ────────────────────────────────────────────────────────
 @app.post("/match/{match_id}/confirm")
-def confirm_score(match_id: int, db: Session = Depends(get_db), user=Depends(require_auth)):
+def confirm_score(match_id: int, db: Session = Depends(get_db), user=Depends(require_session)):
     match = db.query(Match).filter(Match.id == match_id).first()
     if not match or not match.completed:
         raise HTTPException(status_code=404, detail="Match not found or not completed")
 
-    team = user.get("team")
-    if team == match.team1:
+    if user.get("is_admin"):
+        # Admin force-confirms both sides
         match.confirmed_by_team1 = True
-    elif team == match.team2:
         match.confirmed_by_team2 = True
+        match.disputed = False
     else:
-        raise HTTPException(status_code=403, detail="Not your match")
+        team = user.get("team")
+        if team == match.team1:
+            match.confirmed_by_team1 = True
+        elif team == match.team2:
+            match.confirmed_by_team2 = True
+        else:
+            raise HTTPException(status_code=403, detail="Not your match")
 
     db.commit()
     return _match_dict(match)
@@ -214,11 +480,11 @@ def confirm_score(match_id: int, db: Session = Depends(get_db), user=Depends(req
 
 # ── Dispute ───────────────────────────────────────────────────────────────────
 @app.post("/match/{match_id}/dispute")
-def dispute_score(match_id: int, db: Session = Depends(get_db), user=Depends(require_auth)):
+def dispute_score(match_id: int, db: Session = Depends(get_db), user=Depends(require_session)):
     match = db.query(Match).filter(Match.id == match_id).first()
     if not match or not match.completed:
         raise HTTPException(status_code=404, detail="Match not found or not completed")
-    if user.get("team") not in [match.team1, match.team2] and not user.get("is_admin"):
+    if not user.get("is_admin") and user.get("team") not in [match.team1, match.team2]:
         raise HTTPException(status_code=403, detail="Not your match")
     match.disputed = True
     db.commit()
@@ -226,7 +492,7 @@ def dispute_score(match_id: int, db: Session = Depends(get_db), user=Depends(req
 
 
 @app.post("/match/{match_id}/resolve")
-def resolve_dispute(match_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
+def resolve_dispute(match_id: int, db: Session = Depends(get_db), user=Depends(require_admin_session)):
     match = db.query(Match).filter(Match.id == match_id).first()
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
@@ -251,6 +517,7 @@ def get_teams(db: Session = Depends(get_db)):
             "id": team.id, "name": team.name,
             "captain": (captain.name or captain.username) if captain else None,
             "captainId": captain.id if captain else None,
+            "captainPlayerId": captain.player_id if captain else None,
             "players": [{"id": p.id, "name": p.name} for p in players],
             "pairs": [{
                 "id": pair.id, "name": pair.name,
@@ -263,53 +530,83 @@ def get_teams(db: Session = Depends(get_db)):
 
 
 @app.put("/teams/{team_id}")
-def update_team(team_id: int, body: TeamUpdate, db: Session = Depends(get_db), user=Depends(require_auth)):
+def update_team(team_id: int, body: TeamUpdate, db: Session = Depends(get_db), user=Depends(require_admin_session)):
+    """Admin-only: directly rename a team."""
     team = db.query(Team).filter(Team.id == team_id).first()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
-    if not user.get("is_admin") and user.get("team_id") != team_id:
-        raise HTTPException(status_code=403, detail="Can only edit your own team")
     old_name = team.name
     team.name = body.name
     db.query(Match).filter(Match.team1 == old_name).update({"team1": body.name})
     db.query(Match).filter(Match.team2 == old_name).update({"team2": body.name})
-    captain = db.query(Captain).filter(Captain.team_id == team_id).first()
-    if captain:
-        captain.team_name = body.name
+    db.query(Captain).filter(Captain.team_id == team_id).update({"team_name": body.name})
     db.commit()
     return {"id": team.id, "name": team.name}
 
 
+@app.post("/teams/{team_id}/request-rename")
+def request_team_rename(team_id: int, body: RequestTeamRenameBody, db: Session = Depends(get_db), user=Depends(require_session)):
+    """Captain requests a team rename — requires admin approval."""
+    if user.get("is_admin"):
+        raise HTTPException(status_code=400, detail="Admins can rename directly")
+    if user.get("team_id") != team_id:
+        raise HTTPException(status_code=403, detail="Can only request rename for your own team")
+    team = db.query(Team).filter(Team.id == team_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    captain = db.query(Captain).filter(Captain.team_id == team_id, Captain.is_admin == False).first()
+    if not captain:
+        raise HTTPException(status_code=404, detail="Captain not found")
+    existing = db.query(PasswordChangeRequest).filter(
+        PasswordChangeRequest.captain_id == captain.id,
+        PasswordChangeRequest.request_type == "team_rename",
+        PasswordChangeRequest.status == "pending"
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="A rename request is already pending for this team")
+    db.add(PasswordChangeRequest(
+        captain_id=captain.id,
+        request_type="team_rename",
+        reason=body.new_name,  # store requested name in reason field
+        status="pending"
+    ))
+    db.commit()
+    return {"detail": f"Rename request for '{body.new_name}' submitted to admin"}
+
+
 @app.put("/players/{player_id}")
-def update_player(player_id: int, body: PlayerUpdate, db: Session = Depends(get_db), user=Depends(require_auth)):
+def update_player(player_id: int, body: PlayerUpdate, db: Session = Depends(get_db), user=Depends(require_session)):
     player = db.query(Player).filter(Player.id == player_id).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     if not user.get("is_admin") and user.get("team_id") != player.team_id:
         raise HTTPException(status_code=403, detail="Can only edit your own players")
     player.name = body.name
+    # Sync captain display name if this player is the linked captain
+    captain = db.query(Captain).filter(Captain.player_id == player_id).first()
+    if captain:
+        captain.name = body.name
     db.commit()
     return {"id": player.id, "name": player.name}
 
 
 @app.put("/players/{player_id}/set-captain")
-def set_player_as_captain(player_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
+def set_player_as_captain(player_id: int, db: Session = Depends(get_db), user=Depends(require_admin_session)):
     player = db.query(Player).filter(Player.id == player_id).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
-    # Find existing captain for this team
     existing = db.query(Captain).filter(Captain.team_id == player.team_id, Captain.is_admin == False).first()
-    if existing:
-        # Just update the display name — preserve username and password
-        existing.name = player.name
-        db.commit()
-        return {"detail": "Captain name updated", "captain": player.name}
-    else:
+    if not existing:
         raise HTTPException(status_code=404, detail="No captain account exists for this team. Ask the captain to register first.")
+    # Update captain display name and link to this player
+    existing.name = player.name
+    existing.player_id = player.id
+    db.commit()
+    return {"detail": "Captain updated", "captain": player.name}
 
 
 @app.put("/pairs/{pair_id}")
-def update_pair(pair_id: int, body: PairUpdate, db: Session = Depends(get_db), user=Depends(require_auth)):
+def update_pair(pair_id: int, body: PairUpdate, db: Session = Depends(get_db), user=Depends(require_session)):
     pair = db.query(Pair).filter(Pair.id == pair_id).first()
     if not pair:
         raise HTTPException(status_code=404, detail="Pair not found")
@@ -407,7 +704,7 @@ def knockout(db: Session = Depends(get_db)):
 
 # ── Captains (admin only) ─────────────────────────────────────────────────────
 @app.delete("/captains/{captain_id}")
-def delete_captain(captain_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
+def delete_captain(captain_id: int, db: Session = Depends(get_db), user=Depends(require_admin_session)):
     captain = db.query(Captain).filter(Captain.id == captain_id, Captain.is_admin == False).first()
     if not captain:
         raise HTTPException(status_code=404, detail="Captain not found")
@@ -417,13 +714,13 @@ def delete_captain(captain_id: int, db: Session = Depends(get_db), user=Depends(
 
 
 @app.get("/captains")
-def get_captains(db: Session = Depends(get_db), user=Depends(require_admin)):
+def get_captains(db: Session = Depends(get_db), user=Depends(require_admin_session)):
     captains = db.query(Captain).order_by(Captain.team_name).all()
     return [{"id": c.id, "username": c.username, "name": c.name or c.username, "team": c.team_name, "is_admin": c.is_admin} for c in captains]
 
 
 @app.post("/captains")
-def create_captain(body: CaptainCreate, db: Session = Depends(get_db), user=Depends(require_admin)):
+def create_captain(body: CaptainCreate, db: Session = Depends(get_db), user=Depends(require_admin_session)):
     team = db.query(Team).filter(Team.id == body.team_id).first()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
